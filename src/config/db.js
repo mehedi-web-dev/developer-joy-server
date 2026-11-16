@@ -16,10 +16,17 @@ let connectionPromise = null;
  */
 export function getClient() {
   if (!client) {
-    if (!uri) {
-      throw new Error('[Database] MONGODB_URI is not defined in environment variables');
+    const activeUri = process.env.MONGODB_URI || uri;
+    if (!activeUri) {
+      // Gracefully prevent unhandled module evaluation crashes on serverless cold starts
+      console.warn('[Database] MONGODB_URI is not defined in environment variables.');
+      client = new MongoClient('mongodb://localhost:27017/developerjoy', {
+        serverSelectionTimeoutMS: 3000,
+        connectTimeoutMS: 3000,
+      });
+      return client;
     }
-    client = new MongoClient(uri, {
+    client = new MongoClient(activeUri, {
       serverSelectionTimeoutMS: 10000,
       connectTimeoutMS: 10000,
       retryWrites: true,
@@ -45,9 +52,12 @@ export function getDB() {
  * Thread-safe / concurrency-safe: multiple callers share the same connection promise.
  */
 export async function connectDB() {
-  if (!uri) {
+  const activeUri = process.env.MONGODB_URI || uri;
+  if (!activeUri) {
     throw new Error('[Database] MONGODB_URI is not defined in environment variables');
   }
+
+  const activeDbName = process.env.DB_NAME || dbName;
 
   if (db && client) {
     return db;
@@ -61,11 +71,11 @@ export async function connectDB() {
     try {
       const activeClient = getClient();
       await activeClient.connect();
-      db = activeClient.db(dbName);
+      db = activeClient.db(activeDbName);
 
       // Verify connection with a ping
       await db.command({ ping: 1 });
-      console.log(`[Database] Successfully connected to MongoDB database: "${dbName}"`);
+      console.log(`[Database] Successfully connected to MongoDB database: "${activeDbName}"`);
 
       // Initialize indexes for projects collection
       await initializeProjectIndexes(db);

@@ -3,29 +3,68 @@ import cors from 'cors';
 import { toNodeHandler } from 'better-auth/node';
 import dotenv from 'dotenv';
 import { auth } from './lib/auth.js';
+import { getDB } from './config/db.js';
 import projectRoutes from './routes/project.routes.js';
 
 dotenv.config();
 
 const app = express();
 
+// Trust the immediate first-hop reverse proxy (Vercel Edge / API Gateway)
+app.set('trust proxy', 1);
+
 // Disable x-powered-by header for security
 app.disable('x-powered-by');
 
-// Trusted CORS origins
-const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-const backendUrl = process.env.BETTER_AUTH_URL || `http://localhost:${process.env.PORT || 5000}`;
+// Hardened request path normalization for Vercel Edge rewrites
+app.use((req, _res, next) => {
+  const isRewrittenEntrypoint =
+    req.url === '/api' ||
+    req.url === '/api/index' ||
+    req.url === '/api/index.js' ||
+    req.url.startsWith('/api/index?') ||
+    req.url.startsWith('/api?');
+
+  if (!isRewrittenEntrypoint) {
+    return next();
+  }
+
+  const rawMatchedPath = req.headers['x-matched-path'];
+  const matchedPath = Array.isArray(rawMatchedPath) ? rawMatchedPath[0] : rawMatchedPath;
+
+  if (matchedPath && typeof matchedPath === 'string' && matchedPath.startsWith('/')) {
+    const queryIndex = req.url.indexOf('?');
+    const queryString = queryIndex !== -1 ? req.url.slice(queryIndex) : '';
+    const normalizedUrl = matchedPath.includes('?') ? matchedPath : `${matchedPath}${queryString}`;
+    req.url = normalizedUrl;
+    req.originalUrl = normalizedUrl;
+  }
+
+  next();
+});
+
+// Trusted CORS origins (supports comma-separated origins in FRONTEND_URL and CORS_ORIGINS)
+const frontendUrls = (process.env.FRONTEND_URL || 'http://localhost:3000')
+  .split(',')
+  .map((url) => url.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+const corsOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((url) => url.trim().replace(/\/+$/, '')).filter(Boolean)
+  : [];
+
+const backendUrl = (process.env.BETTER_AUTH_URL || `http://localhost:${process.env.PORT || 5000}`)
+  .trim()
+  .replace(/\/+$/, '');
+
 const allowedOrigins = Array.from(
-  new Set(
-    [
-      frontendUrl,
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      backendUrl,
-    ]
-      .filter(Boolean)
-      .map((origin) => origin.trim().replace(/\/+$/, ''))
-  )
+  new Set([
+    ...frontendUrls,
+    ...corsOrigins,
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    backendUrl,
+  ])
 );
 
 app.use(
@@ -41,7 +80,15 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Cookie'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Cookie',
+      'X-Requested-With',
+      'Accept',
+      'Origin',
+    ],
+    exposedHeaders: ['Set-Cookie'],
   })
 );
 
@@ -66,10 +113,33 @@ app.get('/', (_req, res) => {
 });
 
 // Health check endpoint
-app.get('/api/health', (_req, res) => {
-  res.status(200).json({
-    success: true,
-    status: 'healthy',
+app.get('/api/health', async (_req, res) => {
+  let dbStatus = 'disconnected';
+  try {
+    const db = getDB();
+    await db.command({ ping: 1 });
+    dbStatus = 'connected';
+  } catch (err) {
+    dbStatus = `error: ${err.message}`;
+  }
+
+  const configuredEnv = {
+    MONGODB_URI: Boolean(process.env.MONGODB_URI),
+    DB_NAME: Boolean(process.env.DB_NAME),
+    BETTER_AUTH_SECRET: Boolean(process.env.BETTER_AUTH_SECRET),
+    BETTER_AUTH_URL: Boolean(process.env.BETTER_AUTH_URL || process.env.VERCEL_URL),
+    FRONTEND_URL: Boolean(process.env.FRONTEND_URL),
+    ADMIN_EMAIL: Boolean(process.env.ADMIN_EMAIL),
+    ADMIN_PASSWORD: Boolean(process.env.ADMIN_PASSWORD),
+  };
+
+  const isHealthy = dbStatus === 'connected' && configuredEnv.MONGODB_URI && configuredEnv.BETTER_AUTH_SECRET;
+
+  res.status(isHealthy ? 200 : 503).json({
+    success: isHealthy,
+    status: isHealthy ? 'healthy' : 'degraded',
+    database: dbStatus,
+    environmentConfigured: configuredEnv,
     timestamp: new Date().toISOString(),
   });
 });

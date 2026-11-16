@@ -5,21 +5,34 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-const backendUrl = process.env.BETTER_AUTH_URL || `http://localhost:${process.env.PORT || 5000}`;
+const frontendUrls = (process.env.FRONTEND_URL || 'http://localhost:3000')
+  .split(',')
+  .map((url) => url.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+
+const corsOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map((url) => url.trim().replace(/\/+$/, '')).filter(Boolean)
+  : [];
+
+const backendUrl = (
+  process.env.BETTER_AUTH_URL ||
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : '') ||
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
+  `http://localhost:${process.env.PORT || 5000}`
+).trim().replace(/\/+$/, '');
 
 // Build unique normalized trusted origins for CORS and cross-origin authentication
 const trustedOrigins = Array.from(
-  new Set(
-    [
-      frontendUrl,
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      backendUrl,
-    ]
-      .filter(Boolean)
-      .map((origin) => origin.trim().replace(/\/+$/, ''))
-  )
+  new Set([
+    ...frontendUrls,
+    ...corsOrigins,
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'https://developer-joy-server.vercel.app',
+    backendUrl,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : null,
+  ].filter(Boolean))
 );
 
 export const auth = betterAuth({
@@ -27,7 +40,7 @@ export const auth = betterAuth({
     client: getClient(),
   }),
   baseURL: backendUrl,
-  secret: process.env.BETTER_AUTH_SECRET,
+  secret: process.env.BETTER_AUTH_SECRET || 'developerjoy-fallback-secret-key-32-chars-long',
   trustedOrigins,
   emailAndPassword: {
     enabled: true,

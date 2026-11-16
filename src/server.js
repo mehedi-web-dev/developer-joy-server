@@ -67,19 +67,25 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// Graceful shutdown event listeners
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+// In Vercel serverless functions, the runtime handles requests via api/index.js.
+// Only bind to local port and attach termination signals when running standalone.
+if (!process.env.VERCEL) {
+  // Graceful shutdown event listeners
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// Uncaught exceptions and unhandled rejections
-process.on('uncaughtException', (error) => {
-  console.error('[Server] Uncaught Exception:', error);
-  gracefulShutdown('uncaughtException');
-});
+  // Uncaught exceptions and unhandled rejections
+  process.on('uncaughtException', (error) => {
+    console.error('[Server] Uncaught Exception:', error);
+    gracefulShutdown('uncaughtException');
+  });
 
-process.on('unhandledRejection', (reason) => {
-  console.error('[Server] Unhandled Rejection:', reason);
-  gracefulShutdown('unhandledRejection');
-});
+  process.on('unhandledRejection', (reason) => {
+    console.error('[Server] Unhandled Rejection:', reason);
+    gracefulShutdown('unhandledRejection');
+  });
 
-startServer();
+  startServer();
+}
+
+export default app;
