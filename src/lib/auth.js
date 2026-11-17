@@ -1,6 +1,6 @@
 import { betterAuth } from 'better-auth';
 import { mongodbAdapter } from 'better-auth/adapters/mongodb';
-import { getDB, getClient } from '../config/db.js';
+import { getDB, getClient, dbProxy, clientProxy } from '../config/db.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -36,8 +36,8 @@ const trustedOrigins = Array.from(
 );
 
 export const auth = betterAuth({
-  database: mongodbAdapter(getDB(), {
-    client: getClient(),
+  database: mongodbAdapter(dbProxy, {
+    client: clientProxy,
   }),
   baseURL: backendUrl,
   secret: process.env.BETTER_AUTH_SECRET || 'developerjoy-fallback-secret-key-32-chars-long',

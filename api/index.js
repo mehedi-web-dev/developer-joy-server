@@ -37,7 +37,8 @@ async function ensureDatabase() {
  */
 export default async function handler(req, res) {
   // 1. Normalize req.url from Vercel platform rewrite header (x-matched-path)
-  const matchedPath = req.headers['x-matched-path'];
+  const rawMatchedPath = req.headers['x-matched-path'];
+  const matchedPath = Array.isArray(rawMatchedPath) ? rawMatchedPath[0] : rawMatchedPath;
   if (matchedPath && typeof matchedPath === 'string' && matchedPath.startsWith('/')) {
     const queryIndex = req.url.indexOf('?');
     const queryString = queryIndex !== -1 ? req.url.slice(queryIndex) : '';

@@ -8,6 +8,8 @@ const dbName = process.env.DB_NAME || 'developerjoy';
 
 let client = null;
 let db = null;
+let isConnected = false;
+let isDummyClient = false;
 let connectionPromise = null;
 
 /**
@@ -15,8 +17,9 @@ let connectionPromise = null;
  * The driver natively buffers requests and manages connection pooling.
  */
 export function getClient() {
-  if (!client) {
-    const activeUri = process.env.MONGODB_URI || uri;
+  const activeUri = process.env.MONGODB_URI || uri;
+
+  if (!client || (isDummyClient && activeUri)) {
     if (!activeUri) {
       // Gracefully prevent unhandled module evaluation crashes on serverless cold starts
       console.warn('[Database] MONGODB_URI is not defined in environment variables.');
@@ -24,8 +27,17 @@ export function getClient() {
         serverSelectionTimeoutMS: 3000,
         connectTimeoutMS: 3000,
       });
+      isDummyClient = true;
       return client;
     }
+
+    if (isDummyClient && client) {
+      try {
+        client.close();
+      } catch (_) {}
+    }
+
+    isDummyClient = false;
     client = new MongoClient(activeUri, {
       serverSelectionTimeoutMS: 10000,
       connectTimeoutMS: 10000,
@@ -40,9 +52,12 @@ export function getClient() {
  * Returns the active MongoDB Db instance.
  */
 export function getDB() {
-  if (!db) {
+  const activeUri = process.env.MONGODB_URI || uri;
+  const activeDbName = process.env.DB_NAME || dbName;
+
+  if (!db || (isDummyClient && activeUri)) {
     const activeClient = getClient();
-    db = activeClient.db(dbName);
+    db = activeClient.db(activeDbName);
   }
   return db;
 }
@@ -59,7 +74,7 @@ export async function connectDB() {
 
   const activeDbName = process.env.DB_NAME || dbName;
 
-  if (db && client) {
+  if (isConnected && db && client && !isDummyClient) {
     return db;
   }
 
@@ -75,14 +90,15 @@ export async function connectDB() {
 
       // Verify connection with a ping
       await db.command({ ping: 1 });
+      isConnected = true;
       console.log(`[Database] Successfully connected to MongoDB database: "${activeDbName}"`);
 
       // Initialize indexes for projects collection
       await initializeProjectIndexes(db);
       return db;
     } catch (error) {
+      isConnected = false;
       console.error('[Database] Failed to connect to MongoDB:', error.message);
-      connectionPromise = null;
       throw error;
     } finally {
       connectionPromise = null;
@@ -91,6 +107,33 @@ export async function connectDB() {
 
   return connectionPromise;
 }
+
+/**
+ * Returns true if MongoDB connection has been successfully established and verified.
+ */
+export function isDBConnected() {
+  return isConnected;
+}
+
+/**
+ * Dynamic Proxies for Better Auth and external callers.
+ * Resolves to the live, connected client and db instances even across serverless cold starts.
+ */
+export const clientProxy = new Proxy({}, {
+  get(_target, prop) {
+    const active = getClient();
+    const val = active[prop];
+    return typeof val === 'function' ? val.bind(active) : val;
+  },
+});
+
+export const dbProxy = new Proxy({}, {
+  get(_target, prop) {
+    const active = getDB();
+    const val = active[prop];
+    return typeof val === 'function' ? val.bind(active) : val;
+  },
+});
 
 /**
  * Ensures indexes exist on the projects collection.
@@ -116,6 +159,7 @@ export async function closeDB() {
     await client.close();
     client = null;
     db = null;
+    isConnected = false;
     connectionPromise = null;
     console.log('[Database] MongoDB connection closed');
   }
